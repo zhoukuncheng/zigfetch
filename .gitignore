@@ -1,0 +1,12 @@
+# Zig build artifacts
+zig-out/
+.zig-cache/
+.zig-global-cache/
+
+# Editors and OS metadata
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
