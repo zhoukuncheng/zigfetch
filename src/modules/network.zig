@@ -149,23 +149,45 @@ fn findFirstIpv4(data: []const u8) ?[]const u8 {
 }
 
 fn formatProxyStatus(allocator: std.mem.Allocator) ![]const u8 {
-    const proxy_keys = [_][]const u8{
-        "http_proxy",
-        "https_proxy",
-        "all_proxy",
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-    };
-
     var parts = std.ArrayList([]const u8).empty;
     defer freeParts(allocator, &parts);
 
+    // 1. Check Environment Variables (All platforms)
+    const proxy_keys = [_][]const u8{
+        "http_proxy", "https_proxy", "all_proxy",
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+    };
     for (proxy_keys) |key| {
         const value = std.process.getEnvVarOwned(allocator, key) catch continue;
         defer allocator.free(value);
-        const line = try std.fmt.allocPrint(allocator, "{s}={s}", .{ key, value });
-        try parts.append(allocator, line);
+        if (value.len > 0) {
+            const line = try std.fmt.allocPrint(allocator, "{s}={s}", .{ key, value });
+            try parts.append(allocator, line);
+        }
+    }
+
+    // 2. Windows-Specific Registry Check
+    if (builtin.os.tag == .windows) {
+        if (getWindowsProxy(allocator)) |reg_proxy| {
+            if (reg_proxy.len > 0) {
+                // Determine if it looks enabled (registry usually has ProxyEnable=1, but we just fetched the server string)
+                // Ideally we check ProxyEnable too, but getting the server string is a strong signal.
+                const line = try std.fmt.allocPrint(allocator, "WinInet={s}", .{reg_proxy});
+                try parts.append(allocator, line);
+            }
+            allocator.free(reg_proxy);
+        } else |_| {}
+    }
+
+    // 3. Linux GNOME/GSettings Check (Optional, minimal effort)
+    if (builtin.os.tag == .linux) {
+        if (getGnomeProxy(allocator)) |gnome_proxy| {
+            if (gnome_proxy.len > 0 and !std.mem.eql(u8, gnome_proxy, "none") and !std.mem.eql(u8, gnome_proxy, "''")) {
+                const line = try std.fmt.allocPrint(allocator, "GNOME={s}", .{gnome_proxy});
+                try parts.append(allocator, line);
+            }
+            allocator.free(gnome_proxy);
+        } else |_| {}
     }
 
     if (try hasTunnelInterface()) {
@@ -178,6 +200,81 @@ fn formatProxyStatus(allocator: std.mem.Allocator) ![]const u8 {
     }
 
     return try std.mem.join(allocator, ", ", parts.items);
+}
+
+fn getWindowsProxy(allocator: std.mem.Allocator) ![]const u8 {
+    // Check HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings -> ProxyServer
+    // Also ProxyEnable
+    // var hKey: std.os.windows.HKEY = undefined;
+    const subkey = "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+    // We need to use internal RegOpen similar to other modules, but those functions are private inside respective modules unless exported or redefined.
+    // For simplicity, we can use `reg query` via CLI to avoid adding complex registry bindings here if not already present.
+    // Let's use `reg query` for simplicity as we already rely on subprocesses elsewhere.
+
+    // Check ProxyEnable
+    const enable_res = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{ "reg", "query", "HKCU\\" ++ subkey, "/v", "ProxyEnable" },
+        .max_output_bytes = 4096,
+    });
+    defer allocator.free(enable_res.stdout);
+    defer allocator.free(enable_res.stderr);
+
+    if (std.mem.indexOf(u8, enable_res.stdout, "0x1") == null) {
+        return error.Disabled; // Proxy not enabled or command failed
+    }
+
+    // Check ProxyServer
+    const server_res = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{ "reg", "query", "HKCU\\" ++ subkey, "/v", "ProxyServer" },
+        .max_output_bytes = 4096,
+    });
+    defer allocator.free(server_res.stdout);
+    defer allocator.free(server_res.stderr);
+
+    var lines = std.mem.tokenizeScalar(u8, server_res.stdout, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, "ProxyServer")) |_| {
+            // Usually format: ... ProxyServer REG_SZ 127.0.0.1:7890
+            var parts = std.mem.tokenizeAny(u8, line, " \t");
+            _ = parts.next(); // HKEY... or index
+            // Skip until we find REG_SZ
+            while (parts.next()) |p| {
+                if (std.mem.eql(u8, p, "REG_SZ")) {
+                    if (parts.next()) |val| {
+                        return try allocator.dupe(u8, val);
+                    }
+                }
+            }
+        }
+    }
+    return error.NotFound;
+}
+
+fn getGnomeProxy(allocator: std.mem.Allocator) ![]const u8 {
+    // Try getting http proxy host
+    const res = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{ "gsettings", "get", "org.gnome.system.proxy.http", "host" },
+        .max_output_bytes = 1024,
+    }) catch return error.Failed;
+    defer allocator.free(res.stdout);
+    defer allocator.free(res.stderr);
+
+    const host = std.mem.trim(u8, res.stdout, " \t\r\n'");
+    if (host.len == 0) return error.NotFound;
+
+    const port_res = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{ "gsettings", "get", "org.gnome.system.proxy.http", "port" },
+        .max_output_bytes = 1024,
+    }) catch return error.Failed;
+    defer allocator.free(port_res.stdout);
+    defer allocator.free(port_res.stderr);
+
+    const port = std.mem.trim(u8, port_res.stdout, " \t\r\n");
+    return try std.fmt.allocPrint(allocator, "{s}:{s}", .{ host, port });
 }
 
 fn hasTunnelInterface() !bool {
