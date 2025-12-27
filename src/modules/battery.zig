@@ -1,7 +1,12 @@
 const std = @import("std");
 const types = @import("../types.zig");
 
+const builtin = @import("builtin");
+
 pub fn collect(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void {
+    if (builtin.os.tag == .windows) {
+        return collectWindows(ctx, list);
+    }
     var dir = std.fs.openDirAbsolute("/sys/class/power_supply", .{ .iterate = true }) catch return;
     defer dir.close();
 
@@ -12,6 +17,34 @@ pub fn collect(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void
         try appendBattery(ctx, list, entry.name);
     }
 }
+
+fn collectWindows(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void {
+    var status: SYSTEM_POWER_STATUS = undefined;
+    if (GetSystemPowerStatus(&status) == 0) return;
+
+    if (status.BatteryFlag == 128 or status.BatteryFlag == 255) return; // No battery or unknown
+
+    const percent = status.BatteryLifePercent;
+
+    // Status: 1=High, 2=Low, 4=Critical, 8=Charging, 128=No System Battery
+    const state = if ((status.BatteryFlag & 8) != 0) "Charging" else "Discharging";
+
+    const value = try std.fmt.allocPrint(ctx.allocator, "{d}% [{s}]", .{ percent, state });
+    try list.append(ctx.allocator, .{
+        .key = "Battery",
+        .value = value,
+    });
+}
+
+const SYSTEM_POWER_STATUS = extern struct {
+    ACLineStatus: u8,
+    BatteryFlag: u8,
+    BatteryLifePercent: u8,
+    SystemStatusFlag: u8,
+    BatteryLifeTime: u32,
+    BatteryFullLifeTime: u32,
+};
+extern "kernel32" fn GetSystemPowerStatus(lpSystemPowerStatus: *SYSTEM_POWER_STATUS) callconv(.winapi) c_int;
 
 fn appendBattery(ctx: *types.Context, list: *std.ArrayList(types.InfoField), name: []const u8) !void {
     const base = try std.fmt.allocPrint(ctx.allocator, "/sys/class/power_supply/{s}", .{name});

@@ -1,7 +1,12 @@
 const std = @import("std");
 const types = @import("../types.zig");
+const builtin = @import("builtin");
 
 pub fn collect(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void {
+    if (builtin.os.tag == .windows) {
+        return collectWindows(ctx, list);
+    }
+
     var file = std.fs.openFileAbsolute("/etc/os-release", .{}) catch {
         return collectFallback(ctx, list);
     };
@@ -47,13 +52,70 @@ pub fn collect(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void
     if (name) |n| ctx.allocator.free(n);
 }
 
-fn collectFallback(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void {
-    const uts = std.posix.uname();
-    const sysname = std.mem.sliceTo(&uts.sysname, 0);
-    const release = std.mem.sliceTo(&uts.release, 0);
-    const value = try std.fmt.allocPrint(ctx.allocator, "{s} {s}", .{ sysname, release });
+fn collectWindows(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void {
+    const product_name = getWindowsProductName(ctx.allocator) catch try ctx.allocator.dupe(u8, "Windows");
+
+    ctx.setOsId("windows") catch {};
+
     try list.append(ctx.allocator, .{
         .key = "OS",
-        .value = value,
+        .value = product_name,
     });
+}
+
+fn getWindowsProductName(allocator: std.mem.Allocator) ![]const u8 {
+    var hKey: std.os.windows.HKEY = undefined;
+    const path = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &hKey) != 0) {
+        return error.RegistryError;
+    }
+    defer _ = RegCloseKey(hKey);
+
+    var buf: [256]u8 = undefined;
+    var len: u32 = buf.len;
+
+    if (RegQueryValueExA(hKey, "ProductName", null, null, &buf, &len) != 0) {
+        return error.RegistryError;
+    }
+
+    const slice = std.mem.sliceTo(buf[0..len], 0);
+    return try allocator.dupe(u8, std.mem.trim(u8, slice, " "));
+}
+
+const HKEY_LOCAL_MACHINE: std.os.windows.HKEY = @ptrFromInt(0x80000002);
+const KEY_READ: u32 = 0x20019;
+
+extern "advapi32" fn RegOpenKeyExA(
+    hKey: std.os.windows.HKEY,
+    lpSubKey: [*:0]const u8,
+    ulOptions: u32,
+    samDesired: u32,
+    phkResult: *std.os.windows.HKEY,
+) callconv(.winapi) std.os.windows.LSTATUS;
+
+extern "advapi32" fn RegQueryValueExA(
+    hKey: std.os.windows.HKEY,
+    lpValueName: [*:0]const u8,
+    lpReserved: ?*u32,
+    lpType: ?*u32,
+    lpData: ?[*]u8,
+    lpcbData: ?*u32,
+) callconv(.winapi) std.os.windows.LSTATUS;
+
+extern "advapi32" fn RegCloseKey(
+    hKey: std.os.windows.HKEY,
+) callconv(.winapi) std.os.windows.LSTATUS;
+
+fn collectFallback(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void {
+    if (builtin.os.tag != .windows) {
+        const uts = std.posix.uname();
+        const sysname = std.mem.sliceTo(&uts.sysname, 0);
+        const release = std.mem.sliceTo(&uts.release, 0);
+        const value = try std.fmt.allocPrint(ctx.allocator, "{s} {s}", .{ sysname, release });
+        try list.append(ctx.allocator, .{
+            .key = "OS",
+            .value = value,
+        });
+    }
 }

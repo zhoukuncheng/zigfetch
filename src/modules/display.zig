@@ -1,7 +1,10 @@
 const std = @import("std");
 const types = @import("../types.zig");
 
+const builtin = @import("builtin");
+
 pub fn collect(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void {
+    if (builtin.os.tag == .windows) return;
     const result = std.process.Child.run(.{
         .allocator = ctx.allocator,
         .argv = &[_][]const u8{ "xrandr", "--listmonitors" },

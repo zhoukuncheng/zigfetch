@@ -1,10 +1,36 @@
 const std = @import("std");
 const types = @import("../types.zig");
 
+const builtin = @import("builtin");
+
 pub fn collect(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void {
+    if (builtin.os.tag == .windows) {
+        return collectWindows(ctx, list);
+    }
     try appendPath(ctx, list, "/");
     try appendPath(ctx, list, "/mnt/c");
 }
+
+fn collectWindows(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void {
+    var free_bytes: u64 = 0;
+    var total_bytes: u64 = 0;
+    const path = "C:\\";
+
+    if (GetDiskFreeSpaceExA(path, &free_bytes, &total_bytes, null) == 0) return;
+
+    const used_bytes = total_bytes - free_bytes;
+    // Calculate percentage
+    const percent = if (total_bytes > 0) (used_bytes * 100) / total_bytes else 0;
+
+    const value = try std.fmt.allocPrint(ctx.allocator, "(C:) {d:.2} GiB / {d:.2} GiB ({d}%) - NTFS", .{ bytesToGiB(used_bytes), bytesToGiB(total_bytes), percent });
+
+    try list.append(ctx.allocator, .{
+        .key = "Disk",
+        .value = value,
+    });
+}
+
+extern "kernel32" fn GetDiskFreeSpaceExA(lpDirectoryName: ?[*:0]const u8, lpFreeBytesAvailableToCaller: ?*u64, lpTotalNumberOfBytes: ?*u64, lpTotalNumberOfFreeBytes: ?*u64) callconv(.winapi) c_int;
 
 fn appendPath(ctx: *types.Context, list: *std.ArrayList(types.InfoField), path: []const u8) !void {
     const cmd = try std.fmt.allocPrint(ctx.allocator, "df -PT {s}", .{path});
