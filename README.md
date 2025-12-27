@@ -1,34 +1,47 @@
 # zigfetch
 
-zigfetch is a lightweight neofetch/fastfetch-style CLI written in Zig (Linux-first). It shows OS, kernel, host/user, CPU/GPU, memory/swap, disks, uptime, shell/terminal/locale, network (LAN/WAN, proxies, DNS), battery, and display info, with a distro-themed ASCII logo.
+A lightweight, cross-platform system information tool written in Zig, inspired by neofetch and fastfetch. Supports **Linux** and **Windows**.
 
 ## Features
-- Modular collectors: `/etc/os-release`, `uname`, `/proc/*`, DMI, env vars.
-- Hardware: GPU (prefers `nvidia-smi`, falls back to `lspci`), display (`xrandr --listmonitors`), disks (`df -PT`), battery (`/sys/class/power_supply`).
-- Network: LAN IP, WAN IP (via `curl`), proxy/tun/wg detection, DNS from `/etc/resolv.conf`.
-- Rendering controls: `--no-color`, `--no-logo`; honors `NO_COLOR`.
-- Minimal deps; tested with Zig 0.15.
 
-## Usage
+- **Fast & Lightweight**: Minimal dependencies, written in Zig.
+- **Cross-Platform**:
+  - **Linux**: Efficiently gathers info via `/proc`, `/sys`, and standard utilities.
+  - **Windows**: Native implementation using Win32 APIs, Registry, and WMI.
+- **Comprehensive Info**: Displays OS, Kernel, Host, CPU, GPU, Memory, Disk, Network, Battery, and more.
+- **Customizable**: Supports `--no-logo` and `--no-color`.
+
+## Construction & Usage
+
+### Building from source
+
+Requirements: [Zig](https://ziglang.org/download/) 0.15+
+
 ```bash
-zig build
-zig build run -- [--no-logo] [--no-color]
+# Build release executable
+zig build -Doptimize=ReleaseSafe
+
+# Located at:
+# Linux:   ./zig-out/bin/zigfetch
+# Windows: .\zig-out\bin\zigfetch.exe
 ```
 
-Requires access to `/etc/resolv.conf`, `/proc`, `/sys`, and best-effort helpers `ip`/`hostname -I`/`curl`; GPU info improves with `nvidia-smi`/`lspci`, display with `xrandr`, disk with `df`. Missing tools/values display as Unknown/Unavailable.
+### Running
 
-## Layout
-- `src/main.zig` – entrypoint and CLI options
-- `src/modules/` – collectors: os, kernel, host, user, cpu, gpu, memory, swap, disk, uptime, shell, terminal, locale, display, battery, network
-- `src/render.zig` – logo-first rendering and aligned text
-- `src/logo.zig` – distro ASCII logos
-- `build.zig` – build script
-
-## Development
 ```bash
-zig fmt src
-ZIG_GLOBAL_CACHE_DIR=.zig-global-cache zig build
+# Run directly during development
+zig build run
+
+# Run with arguments
+zig build run -- --no-logo
 ```
+
+## Structure
+
+- `src/main.zig`: Application entry point and argument parsing.
+- `src/modules/`: Platform-specific information collectors.
+- `src/render.zig`: ASCII art and text rendering logic.
 
 ## License
-Apache-2.0, see [LICENSE](LICENSE).
+
+Apache-2.0

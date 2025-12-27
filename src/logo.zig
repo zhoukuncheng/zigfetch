@@ -133,8 +133,31 @@ const nix_logo = [_][]const u8{
     blue ++ "         ▝▀▀▀    ▀▀▀▀▘       " ++ cyan ++ "▀▀▀▘" ++ reset,
 };
 
+const windows_logo = [_][]const u8{
+    cyan ++ "                                  .., " ++ reset,
+    cyan ++ "                      ....,,:;+ccllll" ++ reset,
+    cyan ++ "        ...,,+:;  cllllllllllllllllll" ++ reset,
+    cyan ++ "  ,cclllllllllll  lllllllllllllllllll" ++ reset,
+    cyan ++ "  llllllllllllll  lllllllllllllllllll" ++ reset,
+    cyan ++ "  llllllllllllll  lllllllllllllllllll" ++ reset,
+    cyan ++ "  llllllllllllll  lllllllllllllllllll" ++ reset,
+    cyan ++ "  llllllllllllll  lllllllllllllllllll" ++ reset,
+    cyan ++ "  llllllllllllll  lllllllllllllllllll" ++ reset,
+    cyan ++ "                                      " ++ reset,
+    cyan ++ "  llllllllllllll  lllllllllllllllllll" ++ reset,
+    cyan ++ "  llllllllllllll  lllllllllllllllllll" ++ reset,
+    cyan ++ "  llllllllllllll  lllllllllllllllllll" ++ reset,
+    cyan ++ "  llllllllllllll  lllllllllllllllllll" ++ reset,
+    cyan ++ "  llllllllllllll  lllllllllllllllllll" ++ reset,
+    cyan ++ "  `'ccllllllllll  lllllllllllllllllll" ++ reset,
+    cyan ++ "        `' \\*::  :ccllllllllllllllll" ++ reset,
+    cyan ++ "                       ````''*::cllll" ++ reset,
+    cyan ++ "                                 ````" ++ reset,
+};
+
 pub fn pick(os_id: ?[]const u8) []const []const u8 {
     if (os_id) |id| {
+        if (std.ascii.eqlIgnoreCase(id, "windows")) return windows_logo[0..];
         if (std.ascii.eqlIgnoreCase(id, "arch")) return arch_logo[0..];
         if (std.ascii.eqlIgnoreCase(id, "ubuntu")) return ubuntu_logo[0..];
         if (std.ascii.eqlIgnoreCase(id, "debian")) return debian_logo[0..];

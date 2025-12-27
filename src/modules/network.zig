@@ -1,11 +1,21 @@
 const std = @import("std");
 const types = @import("../types.zig");
 
+const builtin = @import("builtin");
+
 pub fn collect(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void {
-    const lan_ip = detectLanIp(ctx.allocator) catch null;
+    const lan_ip = if (builtin.os.tag == .windows)
+        detectLanIpWindows(ctx.allocator) catch null
+    else
+        detectLanIp(ctx.allocator) catch null;
+
     const wan_ip = detectWanIp(ctx.allocator) catch null;
     const proxy_status = try formatProxyStatus(ctx.allocator);
-    const dns = detectDns(ctx.allocator) catch null;
+
+    const dns = if (builtin.os.tag == .windows)
+        detectDnsWindows(ctx.allocator) catch null
+    else
+        detectDns(ctx.allocator) catch null;
 
     try list.append(ctx.allocator, .{
         .key = "LAN IP",
@@ -38,7 +48,37 @@ fn detectLanIp(allocator: std.mem.Allocator) !?[]const u8 {
     return null;
 }
 
+fn detectLanIpWindows(allocator: std.mem.Allocator) !?[]const u8 {
+    // Quick and dirty: use ipconfig
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{"ipconfig"},
+        .max_output_bytes = 64 * 1024,
+    }) catch return null;
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    // Look for "IPv4 Address" or "IPv4"
+    var lines = std.mem.tokenizeScalar(u8, result.stdout, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, "IPv4")) |idx| {
+            if (std.mem.indexOfScalar(u8, line[idx..], ':')) |colon_rel| {
+                const colon_abs = idx + colon_rel;
+                if (colon_abs + 1 < line.len) {
+                    const ip_part = std.mem.trim(u8, line[colon_abs + 1 ..], " \t\r");
+                    // check if looks like IP (naive)
+                    if (std.mem.indexOfScalar(u8, ip_part, '.')) |_| {
+                        return try allocator.dupe(u8, ip_part);
+                    }
+                }
+            }
+        }
+    }
+    return null;
+}
+
 fn detectWanIp(allocator: std.mem.Allocator) !?[]const u8 {
+    // curl is available on Windows 10+
     const primary = &[_][]const u8{ "curl", "-fsSL", "--max-time", "2", "https://api.ipify.org" };
     if (try readCommandFirstLine(allocator, primary)) |ip| return ip;
 
@@ -86,7 +126,10 @@ fn readCommandFirstLine(allocator: std.mem.Allocator, argv: []const []const u8) 
 
     const trimmed = std.mem.trim(u8, result.stdout, " \t\r\n");
     if (trimmed.len == 0) return null;
-    if (std.mem.indexOfScalar(u8, trimmed, '.')) |_| {} else return null;
+    // Basic validation
+    if (std.mem.indexOfScalar(u8, trimmed, '.') == null) return null;
+
+    // Check if it looks like an IP
     if (std.net.Address.parseIp4(trimmed, 0)) |_| {
         return try allocator.dupe(u8, trimmed);
     } else |_| {}
@@ -138,6 +181,7 @@ fn formatProxyStatus(allocator: std.mem.Allocator) ![]const u8 {
 }
 
 fn hasTunnelInterface() !bool {
+    if (builtin.os.tag == .windows) return false; // TODO: Implement for Windows
     var dir = std.fs.openDirAbsolute("/sys/class/net", .{ .iterate = true }) catch return false;
     defer dir.close();
 
@@ -194,5 +238,52 @@ fn detectDns(allocator: std.mem.Allocator) !?[]const u8 {
 
     if (servers.items.len == 0) return null;
 
+    return try std.mem.join(allocator, ", ", servers.items);
+}
+
+fn detectDnsWindows(allocator: std.mem.Allocator) !?[]const u8 {
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{ "ipconfig", "/all" },
+        .max_output_bytes = 64 * 1024,
+    }) catch return null;
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    var servers = std.ArrayList([]const u8).empty;
+    defer freeParts(allocator, &servers);
+
+    var lines = std.mem.tokenizeScalar(u8, result.stdout, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, "DNS Servers")) |idx| {
+            if (std.mem.indexOfScalar(u8, line[idx..], ':')) |colon_rel| {
+                const colon_abs = idx + colon_rel;
+                if (colon_abs + 1 < line.len) {
+                    const dns = std.mem.trim(u8, line[colon_abs + 1 ..], " \t\r");
+                    if (dns.len > 0) {
+                        try servers.append(allocator, try allocator.dupe(u8, dns));
+                        // ipconfig sometimes lists multiple DNS on subsequent lines
+                        while (lines.peek()) |next_line| {
+                            if (std.mem.indexOfScalar(u8, next_line, ':') != null) break; // New key
+                            const next_val = std.mem.trim(u8, next_line, " \t\r");
+                            if (next_val.len > 0) {
+                                // Naive check if it looks like IP
+                                if (std.mem.indexOfScalar(u8, next_val, '.') != null or std.mem.indexOfScalar(u8, next_val, ':') != null) {
+                                    try servers.append(allocator, try allocator.dupe(u8, next_val));
+                                    _ = lines.next();
+                                } else {
+                                    break;
+                                }
+                            } else {
+                                _ = lines.next();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (servers.items.len == 0) return null;
     return try std.mem.join(allocator, ", ", servers.items);
 }

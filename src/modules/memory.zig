@@ -1,7 +1,12 @@
 const std = @import("std");
 const types = @import("../types.zig");
+const builtin = @import("builtin");
 
 pub fn collect(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void {
+    if (builtin.os.tag == .windows) {
+        return collectWindows(ctx, list);
+    }
+
     var file = std.fs.openFileAbsolute("/proc/meminfo", .{}) catch return;
     defer file.close();
 
@@ -40,6 +45,44 @@ pub fn collect(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void
         .value = value,
     });
 }
+
+fn collectWindows(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void {
+    var status: MEMORYSTATUSEX = undefined;
+    status.dwLength = @sizeOf(MEMORYSTATUSEX);
+    if (GlobalMemoryStatusEx(&status) == 0) return;
+
+    const total = status.ullTotalPhys;
+    const avail = status.ullAvailPhys;
+    const used = total - avail;
+
+    const value = try std.fmt.allocPrint(
+        ctx.allocator,
+        "{d:.2} GiB / {d:.2} GiB",
+        .{
+            @as(f64, @floatFromInt(used)) / (1024.0 * 1024.0 * 1024.0),
+            @as(f64, @floatFromInt(total)) / (1024.0 * 1024.0 * 1024.0),
+        },
+    );
+
+    try list.append(ctx.allocator, .{
+        .key = "Memory",
+        .value = value,
+    });
+}
+
+const MEMORYSTATUSEX = extern struct {
+    dwLength: u32,
+    dwMemoryLoad: u32,
+    ullTotalPhys: u64,
+    ullAvailPhys: u64,
+    ullTotalPageFile: u64,
+    ullAvailPageFile: u64,
+    ullTotalVirtual: u64,
+    ullAvailVirtual: u64,
+    ullAvailExtendedVirtual: u64,
+};
+
+extern "kernel32" fn GlobalMemoryStatusEx(lpBuffer: *MEMORYSTATUSEX) callconv(.winapi) c_int;
 
 fn parseValue(line: []const u8) !u64 {
     const idx = std.mem.indexOfScalar(u8, line, ':') orelse return error.ParseFailed;

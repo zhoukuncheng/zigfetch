@@ -1,7 +1,12 @@
 const std = @import("std");
 const types = @import("../types.zig");
+const builtin = @import("builtin");
 
 pub fn collect(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void {
+    if (builtin.os.tag == .windows) {
+        return collectWindows(ctx, list);
+    }
+
     var file = std.fs.openFileAbsolute("/proc/uptime", .{}) catch return;
     defer file.close();
 
@@ -26,3 +31,21 @@ pub fn collect(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void
         .value = value,
     });
 }
+
+fn collectWindows(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void {
+    const ticks = GetTickCount64();
+    const seconds = ticks / 1000;
+
+    const days = seconds / 86_400;
+    const hours = (seconds % 86_400) / 3_600;
+    const mins = (seconds % 3_600) / 60;
+
+    const value = try std.fmt.allocPrint(ctx.allocator, "{d}d {d}h {d}m", .{ days, hours, mins });
+
+    try list.append(ctx.allocator, .{
+        .key = "Uptime",
+        .value = value,
+    });
+}
+
+extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;

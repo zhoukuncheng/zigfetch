@@ -1,7 +1,12 @@
 const std = @import("std");
 const types = @import("../types.zig");
 
+const builtin = @import("builtin");
+
 pub fn collect(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void {
+    if (builtin.os.tag == .windows) {
+        return collectWindows(ctx, list);
+    }
     var seen = std.ArrayList([]const u8).empty;
     defer seen.deinit(ctx.allocator);
 
@@ -9,6 +14,33 @@ pub fn collect(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void
     const summary = try appendLspci(ctx, list, &seen, next_idx);
     if (!summary.found_integrated) {
         try appendCpuHint(ctx, list, &seen, summary.next_index);
+    }
+}
+
+fn collectWindows(ctx: *types.Context, list: *std.ArrayList(types.InfoField)) !void {
+    // Use wmic path win32_VideoController get Name
+    const result = std.process.Child.run(.{
+        .allocator = ctx.allocator,
+        .argv = &[_][]const u8{ "wmic", "path", "win32_VideoController", "get", "Name" },
+        .max_output_bytes = 64 * 1024,
+    }) catch return;
+    defer ctx.allocator.free(result.stdout);
+    defer ctx.allocator.free(result.stderr);
+
+    var lines = std.mem.tokenizeScalar(u8, result.stdout, '\n');
+    _ = lines.next(); // Skip Header "Name"
+
+    var idx: usize = 0;
+    while (lines.next()) |line_raw| {
+        const line = std.mem.trim(u8, line_raw, " \t\r\n");
+        if (line.len == 0) continue;
+
+        const value = try std.fmt.allocPrint(ctx.allocator, "{d}: {s}", .{ idx, line });
+        try list.append(ctx.allocator, .{
+            .key = "GPU",
+            .value = value,
+        });
+        idx += 1;
     }
 }
 
