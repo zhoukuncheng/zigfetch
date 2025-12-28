@@ -78,11 +78,12 @@ fn detectLanIpWindows(allocator: std.mem.Allocator) !?[]const u8 {
 }
 
 fn detectWanIp(allocator: std.mem.Allocator) !?[]const u8 {
-    // curl is available on Windows 10+
-    const primary = &[_][]const u8{ "curl", "-fsSL", "--max-time", "2", "https://api.ipify.org" };
+    var curlCommand: []const u8 = "curl";
+    if (builtin.os.tag == .windows) curlCommand = "curl.exe";
+    const primary = &[_][]const u8{ curlCommand, "-fsSL", "--max-time", "5", "https://checkip.amazonaws.com" };
     if (try readCommandFirstLine(allocator, primary)) |ip| return ip;
 
-    const fallback = &[_][]const u8{ "curl", "-fsSL", "--max-time", "2", "https://ifconfig.me" };
+    const fallback = &[_][]const u8{ curlCommand, "-fsSL", "--max-time", "5", "https://ifconfig.me" };
     if (try readCommandFirstLine(allocator, fallback)) |ip| return ip;
 
     return null;
